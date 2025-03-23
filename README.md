@@ -10,6 +10,7 @@ https://youtu.be/aK3FVobjxvE?si=4kAf5xY62c8oBQFf (아두이노 작동 설명)
 버튼을 이용하여 다양한 모드를 변경할 수 있으며, 가변저항을 사용하여 LED의 밝기를 조절. 
 TaskScheduler와 PinChangeInterrupt 라이브러리를 활용하여 신호등의 상태를 관리.
 p5.js를 통해 LED 상태와 모드전환을 제어.
+ml5.js의 handpose를 활용하여 캠을 통한 손 제스처 인식.
 
 ## 2. 회로 구성
 다음은 Arduino와 연결된 신호등 시스템의 회로 구성도입니다.
