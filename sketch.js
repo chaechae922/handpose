@@ -132,53 +132,51 @@ function parseSerialData(data) {
   });
 }
 
+// ===================== 👇 제스처 처리 =====================
+
 function handleGestures() {
   if (predictions.length === 0) return;
   const now = millis();
+  const hand = predictions[0].landmarks;
+  const extended = getExtendedFingers(hand);
   let gesture = "";
 
-  // 한 손 제스처 (모드 전환)
-  if (predictions.length === 1) {
-    const hand = predictions[0].landmarks;
-    if (isFist(hand)) gesture = "onoff";
-    else if (isOpenHand(hand)) gesture = "emergency";
-    else if (isVSign(hand)) gesture = "blink";
-    else if (isThumbUp(hand)) gesture = "normal";
-  }
-
-  // 두 손 제스처 (슬라이더 제어)
-  if (predictions.length === 2) {
-    const [left, right] = getLeftRightHands(predictions);
-
-    if (isFist(left)) {
-      if (isThumbUp(right)) {
-        redTime = constrain(redTime + 500, 100, 5000);
-        redSlider.value(redTime);
-        sendCommand(`redTime=${redTime}`);
-      } else if (isThumbDown(right)) {
-        redTime = constrain(redTime - 500, 100, 5000);
-        redSlider.value(redTime);
-        sendCommand(`redTime=${redTime}`);
-      } else if (isVSign(right)) {
-        yellowTime = constrain(yellowTime + 200, 100, 5000);
-        yellowSlider.value(yellowTime);
-        sendCommand(`yellowTime=${yellowTime}`);
-      } else if (isOneFinger(right)) {
-        yellowTime = constrain(yellowTime - 200, 100, 5000);
-        yellowSlider.value(yellowTime);
-        sendCommand(`yellowTime=${yellowTime}`);
-      } else if (isOpenHand(right)) {
-        greenTime = constrain(greenTime + 300, 100, 5000);
-        greenSlider.value(greenTime);
-        sendCommand(`greenTime=${greenTime}`);
-      }
-    }
-
-    if (isFist(left) && isFist(right)) {
-      greenTime = constrain(greenTime - 300, 100, 5000);
-      greenSlider.value(greenTime);
-      sendCommand(`greenTime=${greenTime}`);
-    }
+  if (extended.length === 2 && extended.includes(1) && extended.includes(2)) {
+    gesture = "redUp";
+    redTime = constrain(redTime + 300, 100, 5000);
+    redSlider.value(redTime);
+    sendCommand(`redTime=${redTime}`);
+  } else if (extended.length === 1 && extended[0] === 1) {
+    gesture = "redDown";
+    redTime = constrain(redTime - 300, 100, 5000);
+    redSlider.value(redTime);
+    sendCommand(`redTime=${redTime}`);
+  } else if (extended.length === 2 && extended.includes(2) && extended.includes(3)) {
+    gesture = "yellowUp";
+    yellowTime = constrain(yellowTime + 300, 100, 5000);
+    yellowSlider.value(yellowTime);
+    sendCommand(`yellowTime=${yellowTime}`);
+  } else if (extended.length === 1 && extended[0] === 2) {
+    gesture = "yellowDown";
+    yellowTime = constrain(yellowTime - 300, 100, 5000);
+    yellowSlider.value(yellowTime);
+    sendCommand(`yellowTime=${yellowTime}`);
+  } else if (extended.length === 2 && extended.includes(2) && extended.includes(6)) {
+    gesture = "greenUp";
+    greenTime = constrain(greenTime + 300, 100, 5000);
+    greenSlider.value(greenTime);
+    sendCommand(`greenTime=${greenTime}`);
+  } else if (extended.length === 0) {
+    gesture = "greenDown"; // 또는 on/off (중복 허용)
+    greenTime = constrain(greenTime - 300, 100, 5000);
+    greenSlider.value(greenTime);
+    sendCommand(`greenTime=${greenTime}`);
+  } else if (extended.length === 5) {
+    gesture = "emergency";
+  } else if (isFingerHeart(hand)) {
+    gesture = "normal";
+  } else if (isWideV(hand)) {
+    gesture = "blink";
   }
 
   if (gesture && gesture !== lastGesture && now - lastGestureTime > gestureCooldown) {
@@ -194,73 +192,25 @@ function handleGestures() {
   }
 }
 
-// ✋ 판별 함수들
-function isFist(lm) {
-  const foldedFingers = [8, 12, 16, 20].every(i => {
-    const tipY = lm[i][1];
-    const pipY = lm[i - 1][1];
-    return tipY > pipY + 10; // 더 명확한 구부림
-  });
-
-  const thumbTip = lm[4];
-  const thumbIP = lm[3];
-  const thumbBase = lm[2];
-  const thumbCurled = thumbTip[0] < thumbBase[0] && dist(thumbTip[0], thumbTip[1], thumbIP[0], thumbIP[1]) < 30;
-
-  return foldedFingers && thumbCurled;
+function getExtendedFingers(lm) {
+  const extended = [];
+  if (lm[4][0] > lm[3][0]) extended.push(1); // Thumb
+  if (lm[8][1] < lm[6][1]) extended.push(2); // Index
+  if (lm[12][1] < lm[10][1]) extended.push(3); // Middle
+  if (lm[16][1] < lm[14][1]) extended.push(4); // Ring
+  if (lm[20][1] < lm[18][1]) extended.push(6); // Pinky
+  return extended;
 }
 
-function isOpenHand(lm) {
-  return [4, 8, 12, 16, 20].every(i => lm[i][1] < lm[i - 2][1]);
+function isFingerHeart(lm) {
+  const d = dist(lm[4][0], lm[4][1], lm[8][0], lm[8][1]);
+  return d < 20;
 }
 
-function isVSign(lm) {
-  const index = lm[8];
-  const middle = lm[12];
-  const ring = lm[16];
-  const indexBase = lm[5];
-  const middleBase = lm[9];
-
-  const imDist = dist(index[0], index[1], middle[0], middle[1]);
-  const imBaseDist = dist(indexBase[0], indexBase[1], middleBase[0], middleBase[1]);
-  const ringFolded = ring[1] > lm[14][1]; // 링거 접혀 있는지
-
-  return imDist > imBaseDist * 1.2 && ringFolded;
-}
-
-function isThumbUp(lm) {
-  const tip = lm[4];
-  const ip = lm[3];
-  const base = lm[2];
-  const indexBase = lm[5];
-
-  function isThumbUp(lm) {
-    const tip = lm[4];
-    const ip = lm[3];
-    const base = lm[2];
-    const indexBase = lm[5];
-  
-    return (
-      thumbTip[1] < thumbBase[1] && // 수직 위에 있음
-      abs(thumbTip[0] - thumbBase[0]) < 20 && // 거의 수직 직선
-      dist(thumbTip[0], thumbTip[1], indexBase[0], indexBase[1]) > 40
-    );    
-  }  
-}
-
-function isThumbDown(lm) {
-  return lm[4][1] > lm[2][1] && lm[4][1] > lm[5][1];
-}
-
-function isOneFinger(lm) {
-  return lm[8][1] < lm[6][1] &&
-         [12, 16, 20].every(i => lm[i][1] > lm[i - 2][1]);
-}
-
-function getLeftRightHands(hands) {
-  if (hands.length < 2) return [null, null];
-  const [handA, handB] = hands;
-  return (handA.landmarks[0][0] < handB.landmarks[0][0])
-    ? [handA.landmarks, handB.landmarks]
-    : [handB.landmarks, handA.landmarks];
+function isWideV(lm) {
+  const i = lm[8];
+  const m = lm[12];
+  const ringFolded = lm[16][1] > lm[14][1];
+  const pinkyFolded = lm[20][1] > lm[18][1];
+  return dist(i[0], i[1], m[0], m[1]) > 60 && ringFolded && pinkyFolded;
 }
