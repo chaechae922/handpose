@@ -11,7 +11,7 @@ let handpose;
 let predictions = [];
 
 let lastGesture = "";
-let gestureCooldown = 1000; // 1초 쿨다운
+let gestureCooldown = 700;
 let lastGestureTime = 0;
 
 function setup() {
@@ -26,9 +26,7 @@ function setup() {
     console.log("🤖 Handpose model loaded!");
   });
 
-  handpose.on("predict", results => {
-    predictions = results;
-  });
+  handpose.on("predict", results => predictions = results);
 
   port = createSerial();
   let usedPorts = usedSerialPorts();
@@ -39,24 +37,21 @@ function setup() {
   connectBtn.mousePressed(togglePort);
 
   redSlider = createSlider(100, 5000, redTime, 100);
-  redSlider.position(10, 20);
-  redSlider.input(() => {
+  redSlider.position(10, 20).input(() => {
     redTime = redSlider.value();
     sendCommand(`redTime=${redTime}`);
     if (ledRed === 1 && mode === "normal") sendCommand(`apply=red`);
   });
 
   yellowSlider = createSlider(100, 5000, yellowTime, 100);
-  yellowSlider.position(10, 60);
-  yellowSlider.input(() => {
+  yellowSlider.position(10, 60).input(() => {
     yellowTime = yellowSlider.value();
     sendCommand(`yellowTime=${yellowTime}`);
     if (ledYellow === 1 && mode === "normal") sendCommand(`apply=yellow`);
   });
 
   greenSlider = createSlider(100, 5000, greenTime, 100);
-  greenSlider.position(10, 100);
-  greenSlider.input(() => {
+  greenSlider.position(10, 100).input(() => {
     greenTime = greenSlider.value();
     sendCommand(`greenTime=${greenTime}`);
     if (ledGreen === 1 && mode === "normal") sendCommand(`apply=green`);
@@ -91,20 +86,17 @@ function draw() {
 }
 
 function drawKeypoints() {
-  if (predictions.length > 0) {
-    const hand = predictions[0];
+  predictions.forEach(hand => {
     const scaleX = 160 / video.width;
     const scaleY = 120 / video.height;
-
-    for (let i = 0; i < hand.landmarks.length; i++) {
-      const [x, y] = hand.landmarks[i];
+    hand.landmarks.forEach(([x, y]) => {
       const sx = x * scaleX + 20;
       const sy = y * scaleY + 270;
       fill(255, 0, 0);
       noStroke();
       circle(sx, sy, 6);
-    }
-  }
+    });
+  });
 }
 
 function drawLED(x, y, on, label, ledColor) {
@@ -131,10 +123,7 @@ function sendCommand(cmd) {
 function parseSerialData(data) {
   let parts = data.split(",");
   parts.forEach(p => {
-    const idx = p.indexOf(":");
-    if (idx === -1) return;
-    let key = p.substring(0, idx).trim();
-    let val = p.substring(idx + 1).trim();
+    let [key, val] = p.split(":").map(s => s.trim());
     if (key === "mode") mode = val;
     else if (key === "brightness") brightness = int(val);
     else if (key === "red") ledRed = int(val);
@@ -143,64 +132,135 @@ function parseSerialData(data) {
   });
 }
 
-// 👋 제스처 처리
 function handleGestures() {
   if (predictions.length === 0) return;
-
-  const hand = predictions[0];
-  const landmarks = hand.landmarks;
   const now = millis();
-
   let gesture = "";
 
-  if (isFist(landmarks)) gesture = "onoff";
-  else if (isOpenHand(landmarks)) gesture = "emergency";
-  else if (isVSign(landmarks)) gesture = "blink";
-  else if (isThumbUp(landmarks)) gesture = "normal";
+  // 한 손 제스처 (모드 전환)
+  if (predictions.length === 1) {
+    const hand = predictions[0].landmarks;
+    if (isFist(hand)) gesture = "onoff";
+    else if (isOpenHand(hand)) gesture = "emergency";
+    else if (isVSign(hand)) gesture = "blink";
+    else if (isThumbUp(hand)) gesture = "normal";
+  }
+
+  // 두 손 제스처 (슬라이더 제어)
+  if (predictions.length === 2) {
+    const [left, right] = getLeftRightHands(predictions);
+
+    if (isFist(left)) {
+      if (isThumbUp(right)) {
+        redTime = constrain(redTime + 500, 100, 5000);
+        redSlider.value(redTime);
+        sendCommand(`redTime=${redTime}`);
+      } else if (isThumbDown(right)) {
+        redTime = constrain(redTime - 500, 100, 5000);
+        redSlider.value(redTime);
+        sendCommand(`redTime=${redTime}`);
+      } else if (isVSign(right)) {
+        yellowTime = constrain(yellowTime + 200, 100, 5000);
+        yellowSlider.value(yellowTime);
+        sendCommand(`yellowTime=${yellowTime}`);
+      } else if (isOneFinger(right)) {
+        yellowTime = constrain(yellowTime - 200, 100, 5000);
+        yellowSlider.value(yellowTime);
+        sendCommand(`yellowTime=${yellowTime}`);
+      } else if (isOpenHand(right)) {
+        greenTime = constrain(greenTime + 300, 100, 5000);
+        greenSlider.value(greenTime);
+        sendCommand(`greenTime=${greenTime}`);
+      }
+    }
+
+    if (isFist(left) && isFist(right)) {
+      greenTime = constrain(greenTime - 300, 100, 5000);
+      greenSlider.value(greenTime);
+      sendCommand(`greenTime=${greenTime}`);
+    }
+  }
 
   if (gesture && gesture !== lastGesture && now - lastGestureTime > gestureCooldown) {
     if (gesture === "onoff") sendCommand("button=3");
     else if (gesture === "emergency") sendCommand("button=1");
     else if (gesture === "blink") sendCommand("button=2");
     else if (gesture === "normal") {
-      sendCommand("button=3"); // Off
-      setTimeout(() => sendCommand("button=3"), 100); // 다시 On
+      sendCommand("button=3");
+      setTimeout(() => sendCommand("button=3"), 100);
     }
-
     lastGesture = gesture;
     lastGestureTime = now;
   }
 }
 
-// 제스처 판별 함수들
-function isFist(landmarks) {
-  const tips = [8, 12, 16, 20];
-  const mcps = [5, 9, 13, 17];
-  for (let i = 0; i < tips.length; i++) {
-    if (landmarks[tips[i]][1] < landmarks[mcps[i]][1]) return false;
-  }
-  return landmarks[4][0] < landmarks[3][0];
+// ✋ 판별 함수들
+function isFist(lm) {
+  const foldedFingers = [8, 12, 16, 20].every(i => {
+    const tipY = lm[i][1];
+    const pipY = lm[i - 1][1];
+    return tipY > pipY + 10; // 더 명확한 구부림
+  });
+
+  const thumbTip = lm[4];
+  const thumbIP = lm[3];
+  const thumbBase = lm[2];
+  const thumbCurled = thumbTip[0] < thumbBase[0] && dist(thumbTip[0], thumbTip[1], thumbIP[0], thumbIP[1]) < 30;
+
+  return foldedFingers && thumbCurled;
 }
 
-function isOpenHand(landmarks) {
-  const tips = [4, 8, 12, 16, 20];
-  const bases = [2, 5, 9, 13, 17];
-  for (let i = 0; i < tips.length; i++) {
-    if (landmarks[tips[i]][1] >= landmarks[bases[i]][1]) return false;
-  }
-  return true;
+function isOpenHand(lm) {
+  return [4, 8, 12, 16, 20].every(i => lm[i][1] < lm[i - 2][1]);
 }
 
-function isVSign(landmarks) {
-  const i = landmarks[8];
-  const m = landmarks[12];
-  const r = landmarks[16];
-  return dist(i[0], i[1], m[0], m[1]) > 50 && dist(m[0], m[1], r[0], r[1]) < 30;
+function isVSign(lm) {
+  const index = lm[8];
+  const middle = lm[12];
+  const ring = lm[16];
+  const indexBase = lm[5];
+  const middleBase = lm[9];
+
+  const imDist = dist(index[0], index[1], middle[0], middle[1]);
+  const imBaseDist = dist(indexBase[0], indexBase[1], middleBase[0], middleBase[1]);
+  const ringFolded = ring[1] > lm[14][1]; // 링거 접혀 있는지
+
+  return imDist > imBaseDist * 1.2 && ringFolded;
 }
 
-function isThumbUp(landmarks) {
-  const thumbTip = landmarks[4];
-  const thumbBase = landmarks[2];
-  const indexBase = landmarks[5];
-  return thumbTip[1] < thumbBase[1] && thumbTip[1] < indexBase[1];
+function isThumbUp(lm) {
+  const tip = lm[4];
+  const ip = lm[3];
+  const base = lm[2];
+  const indexBase = lm[5];
+
+  function isThumbUp(lm) {
+    const tip = lm[4];
+    const ip = lm[3];
+    const base = lm[2];
+    const indexBase = lm[5];
+  
+    return (
+      thumbTip[1] < thumbBase[1] && // 수직 위에 있음
+      abs(thumbTip[0] - thumbBase[0]) < 20 && // 거의 수직 직선
+      dist(thumbTip[0], thumbTip[1], indexBase[0], indexBase[1]) > 40
+    );    
+  }  
+}
+
+function isThumbDown(lm) {
+  return lm[4][1] > lm[2][1] && lm[4][1] > lm[5][1];
+}
+
+function isOneFinger(lm) {
+  return lm[8][1] < lm[6][1] &&
+         [12, 16, 20].every(i => lm[i][1] > lm[i - 2][1]);
+}
+
+function getLeftRightHands(hands) {
+  if (hands.length < 2) return [null, null];
+  const [handA, handB] = hands;
+  return (handA.landmarks[0][0] < handB.landmarks[0][0])
+    ? [handA.landmarks, handB.landmarks]
+    : [handB.landmarks, handA.landmarks];
 }
